@@ -17,12 +17,8 @@ from imbox import Imbox
 
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
-
-# 1. Define DB Folder logic
 DB_FOLDER = 'db'
 DB_FILE = os.path.join(DB_FOLDER, 'scan_stats.db')
-
-# 2. Define Max File Size (32MB)
 MAX_FILE_SIZE = 32 * 1024 * 1024 
 
 VT_API_KEY = os.environ.get('VT_API_KEY')
@@ -44,6 +40,14 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 if not os.path.exists(DB_FOLDER): os.makedirs(DB_FOLDER)
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
+
+# --- NEW: FORCE NON-WWW REDIRECT ---
+@app.before_request
+def redirect_www():
+    """Redirect www.checkifsafe.com to checkifsafe.com"""
+    if request.host.startswith('www.'):
+        # 301 = Permanent Redirect
+        return redirect(request.url.replace('www.', '', 1), code=301)
 
 # --- DATABASE ---
 def init_db():
@@ -108,9 +112,7 @@ def scan_url_vt(target_url):
         url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
         headers = {"x-apikey": VT_API_KEY}
         
-        # 1. Check existing report
         response = requests.get(url, headers=headers, timeout=10)
-        
         if response.status_code == 200:
             data = response.json().get("data", {}).get("attributes", {})
             stats = data.get("last_analysis_stats", {})
@@ -122,18 +124,16 @@ def scan_url_vt(target_url):
                 "link": f"https://www.virustotal.com/gui/url/{url_id}"
             }
         elif response.status_code == 404:
-            # 2. Submit New URL
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
             
-            # 3. NEW: Wait Loop for URL (Max 30s)
             print(f"URL {target_url} is new. Waiting...", flush=True)
-            for _ in range(6): # 6 checks * 5 seconds = 30s
+            for _ in range(6): 
                 time.sleep(5)
                 response = requests.get(url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json().get("data", {}).get("attributes", {})
                     stats = data.get("last_analysis_stats", {})
-                    if sum(stats.values()) > 0: # Ensure scan is actually done
+                    if sum(stats.values()) > 0:
                         return {
                             "status": "finished",
                             "malicious": stats.get("malicious", 0),
@@ -141,9 +141,7 @@ def scan_url_vt(target_url):
                             "harmless": stats.get("harmless", 0),
                             "link": f"https://www.virustotal.com/gui/url/{url_id}"
                         }
-
             return {"status": "queued", "link": f"https://www.virustotal.com/gui/url/{url_id}"}
-            
     except: pass
     return {"status": "error", "link": "#"}
 
@@ -177,34 +175,28 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
-    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | CheckIfSafe.com | Powered by VirusTotal</div></div></body></html>"""
 
 # --- BACKUP ROBOT ---
 def backup_task():
     BACKUP_DIR = os.path.join(os.getcwd(), 'backups')
     if not os.path.exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
-
     while True:
-        time.sleep(86400) # 24 Hours
+        time.sleep(86400)
         try:
             if not os.path.exists(DB_FILE): continue
             date_str = datetime.datetime.now().strftime('%Y-%m-%d')
             backup_path = os.path.join(BACKUP_DIR, f"backup_{date_str}.db")
-
             src = sqlite3.connect(DB_FILE)
             dst = sqlite3.connect(backup_path)
             with dst: src.backup(dst)
             dst.close()
             src.close()
-            
-            # Clean up old
             now = time.time()
             cutoff = now - (365 * 86400)
             for filename in os.listdir(BACKUP_DIR):
                 if os.path.getmtime(os.path.join(BACKUP_DIR, filename)) < cutoff:
                     os.remove(os.path.join(BACKUP_DIR, filename))
-
-            # Email Notify
             if EMAIL_USER:
                 msg = EmailMessage()
                 msg['Subject'] = f"✅ Backup Success: {date_str}"
@@ -225,13 +217,11 @@ def email_listener():
         t_backup = threading.Thread(target=backup_task, daemon=True)
         t_backup.start()
     except IOError: return
-
     while True:
         try:
             if not EMAIL_USER: 
                 time.sleep(30)
                 continue
-            
             with Imbox(EMAIL_HOST, username=EMAIL_USER, password=EMAIL_PASS, ssl=True, ssl_context=None, starttls=False) as imbox:
                 unread_msgs = imbox.messages(unread=True)
                 for uid, message in unread_msgs:
@@ -239,24 +229,17 @@ def email_listener():
                     subject = message.subject
                     body_plain = message.body['plain'][0] if message.body['plain'] else ""
                     print(f"Processing {sender}...", flush=True)
-                    
                     scan_items = []
-                    # 1. SCAN LINKS
                     urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', body_plain)
                     unique_urls = list(set(urls)) 
                     for url in unique_urls:
                         domain = urlparse(url).netloc.lower()
                         if any(skip in domain for skip in SKIP_DOMAINS): continue
-                        
-                        # This now has a 30s Wait Loop inside
                         res = scan_url_vt(url)
-                        
                         status = "QUEUED"
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
-
-                    # 2. SCAN ATTACHMENTS (Optimized Wait)
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
@@ -266,7 +249,6 @@ def email_listener():
                             res = check_vt_file(fhash)
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                # OPTIMIZED LOOP: Check every 5s (Faster!) for 60s
                                 for _ in range(12): 
                                     time.sleep(5) 
                                     res = check_vt_file(fhash)
@@ -275,8 +257,6 @@ def email_listener():
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
                             log_scan(sender, fname, status)
-                    
-                    # 3. SEND REPLY
                     if scan_items:
                         html_body = generate_html_email(subject, scan_items)
                         msg = EmailMessage()
@@ -291,15 +271,13 @@ def email_listener():
                         imbox.mark_seen(uid)
                         print(f"Reply sent to {sender}", flush=True)
         except Exception as e: print(f"Error: {e}", flush=True)
-        
-        # CHECK INBOX FASTER (Every 5 seconds)
         time.sleep(5)
 
 if os.environ.get('EMAIL_USER'):
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
 
-# --- WEB ROUTES (Same as before) ---
+# --- WEB ROUTES ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -343,4 +321,3 @@ def stats():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
