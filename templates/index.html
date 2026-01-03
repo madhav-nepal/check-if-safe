@@ -6,35 +6,46 @@
     <title>Check If Safe | Know Before You Click</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .upload-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; width: 400px; }
-        h1 { margin-bottom: 15px; color: #333; font-size: 24px; }
+        
+        /* WIDER BOX to fit the title on one line */
+        .upload-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; width: 600px; }
+        
+        /* ICON ON TOP */
+        .main-icon { font-size: 48px; display: block; margin-bottom: 10px; }
+        
+        /* TITLE ON ONE LINE */
+        h1 { margin-bottom: 10px; color: #333; font-size: 24px; white-space: nowrap; }
+        
         p.subtitle { color: #666; margin-bottom: 30px; font-size: 14px; line-height: 1.5; }
         
-        /* Updated: Added margin to the top and bottom */
-        .file-drop-area { border: 2px dashed #ccc; padding: 30px; border-radius: 8px; margin-top: 25px; margin-bottom: 25px; transition: 0.3s; cursor: pointer; }
+        /* UPLOAD BOX - Reduced Height (Padding reduced from 30px to 15px) */
+        .file-drop-area { border: 2px dashed #ccc; padding: 15px; border-radius: 8px; margin-top: 20px; margin-bottom: 25px; transition: 0.3s; cursor: pointer; display: block; }
         .file-drop-area:hover { border-color: #007bff; background-color: #f8f9fa; }
         
         input[type="file"] { display: none; }
         
-        /* Updated: Width is now 50% and centered */
-        .btn { background-color: #007bff; color: white; border: none; padding: 12px 0; border-radius: 6px; cursor: pointer; font-size: 16px; width: 50%; margin: 0 auto; display: block; transition: background 0.3s; }
+        /* SCAN BUTTON - Added Margin Top to prevent overlap */
+        .btn { background-color: #007bff; color: white; border: none; padding: 12px 0; border-radius: 6px; cursor: pointer; font-size: 16px; width: 50%; margin: 20px auto 0 auto; display: block; transition: background 0.3s; }
         .btn:hover { background-color: #0056b3; }
         
-        .footer { margin-top: 30px; font-size: 12px; color: #aaa; }
+        .footer { margin-top: 40px; font-size: 12px; color: #aaa; }
     </style>
 </head>
 <body>
     <div class="upload-box">
-        <h1>🛡️ Check If Safe | Know Before You Click</h1>
+        <span class="main-icon">🛡️</span>
+
+        <h1>Check If Safe | Know Before You Click</h1>
         
-        <p class="subtitle">Learn how to save time by automating suspicious email scans.</p>
+        <p class="subtitle">Want to save time by automating suspicious email scans? Just forward email in question to scan @ checkifsafe.com.</p>
         
         <form action="/" method="post" enctype="multipart/form-data">
             <label class="file-drop-area">
-                <span id="file-label">Click to select a file</span>
+                <span id="file-label">Select a File</span>
                 <input type="file" name="file" id="file" required onchange="document.getElementById('file-label').innerText = this.files[0].name">
             </label>
-            <button type="submit" class="btn">Scan File</button>
+            
+            <button type="submit" class="btn">Scan</button>
         </form>
 
         <div class="footer">
