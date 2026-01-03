@@ -1,22 +1,25 @@
-# Use a lightweight Python image
+# Use a lightweight Python base image
 FROM python:3.9-slim
 
-# Set working directory
+# 1. Install System Tools (CURL is critical for healthcheck)
+# We also add 'gcc' because some Python libraries need it to build.
+RUN apt-get update && apt-get install -y \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Set up the working directory
 WORKDIR /app
 
-# Copy requirements first
+# 3. Copy requirements and install Python libraries
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# We explicitly install gunicorn here to be safe
+RUN pip install --no-cache-dir -r requirements.txt && pip install gunicorn
 
-# Copy the rest of the application
+# 4. Copy the rest of your application code
 COPY . .
 
-# Create uploads folder manually to avoid permission issues
-RUN mkdir -p uploads
-
-# Expose port 5000
-EXPOSE 5000
-
-# Run with Gunicorn (Professional Server)
+# 5. Define the "Start Command" (Using Gunicorn for Production)
+# -w 4: Use 4 workers (like you had before)
+# -b 0.0.0.0:5000: Listen on Port 5000
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "main:app"]
-# Force rebuild
