@@ -6,6 +6,7 @@ import threading
 import time
 import sqlite3
 import datetime
+import fcntl # NEW: For locking
 from email.message import EmailMessage
 from flask import Flask, render_template, request, redirect, url_for, render_template_string
 from werkzeug.utils import secure_filename
@@ -87,7 +88,7 @@ def upload_to_vt(filepath):
         files = {"file": (os.path.basename(filepath), file)}
         requests.post(url, headers=headers, files=files)
 
-# --- EMAIL LISTENER (Background Robot) ---
+# --- EMAIL LISTENER (Singleton Robot) ---
 def send_reply(to_email, subject, body):
     try:
         msg = EmailMessage()
@@ -95,7 +96,7 @@ def send_reply(to_email, subject, body):
         msg['Subject'] = subject
         msg['From'] = EMAIL_USER
         msg['To'] = to_email
-        # Note: Using port 465 for SSL. If your host uses 587, change here.
+        # Using port 465 (SSL)
         with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
             smtp.send_message(msg)
@@ -104,15 +105,24 @@ def send_reply(to_email, subject, body):
         print(f"Email Reply Error: {e}")
 
 def email_listener():
-    print("Email Robot: Starting up...")
+    # 1. Try to acquire the "Highlander" lock
+    lock_file = open("email_bot.lock", "w")
+    try:
+        # LOCK_EX = Exclusive Lock (Only one person can hold it)
+        # LOCK_NB = Non-Blocking (If someone else has it, fail immediately, don't wait)
+        fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        print("--- SYSTEM CHECK: I am the PRIMARY Email Robot. Starting scan loop... ---", flush=True)
+    except IOError:
+        print("--- SYSTEM CHECK: Another worker is already the Robot. I will sleep. ---", flush=True)
+        return # Exit this thread, do nothing.
+
+    # 2. If we are here, we own the lock. Run the loop forever.
     while True:
         try:
             if not EMAIL_USER or not EMAIL_PASS: 
-                print("Email Robot: Credentials missing, sleeping...")
                 time.sleep(60)
                 continue
             
-            # Connect to Email
             with Imbox(EMAIL_HOST, username=EMAIL_USER, password=EMAIL_PASS, ssl=True, ssl_context=None, starttls=False) as imbox:
                 unread_msgs = imbox.messages(unread=True)
                 for uid, message in unread_msgs:
@@ -131,7 +141,6 @@ def email_listener():
                             fhash = get_file_hash(fpath)
                             res = check_vt_status(fhash)
                             
-                            # If new file, upload it
                             if res['status'] == 'queued': 
                                 upload_to_vt(fpath)
                                 res_text = "Analysis Started (Check back later)"
@@ -148,19 +157,52 @@ def email_listener():
         except Exception as e:
             print(f"Email Robot Error: {e}")
         
-        time.sleep(10) # Check every 10 seconds
+        time.sleep(10)
 
-# --- DEBUG SECTION ---
-# This forces Python to print to the logs immediately (flush=True)
-email_user = os.environ.get('EMAIL_USER')
-print(f"--- SYSTEM CHECK: Email User Detected? {'YES' if email_user else 'NO'} ---", flush=True)
-
-if email_user:
-    print("--- SYSTEM CHECK: Starting Email Robot Thread... ---", flush=True)
+# --- STARTUP CHECK ---
+if os.environ.get('EMAIL_USER'):
+    # Start the thread. The thread will try to lock the file.
+    # If it fails (because another worker has it), the thread effectively dies.
+    # If it succeeds, it runs the loop.
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
-else:
-    print("--- SYSTEM CHECK: Email Robot SKIPPED (EMAIL_USER is missing) ---", flush=True)
+
+# --- WEB ROUTES ---
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        if 'file' not in request.files: return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '': return redirect(request.url)
+        
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        file_hash = get_file_hash(file_path)
+        status = check_vt_status(file_hash)
+        if status['status'] == 'queued':
+            upload_to_vt(file_path)
+
+        if os.path.exists(file_path): os.remove(file_path)
+        return redirect(url_for('scan_status', file_hash=file_hash))
+
+    return render_template('index.html')
+
+@app.route('/scan/<file_hash>')
+def scan_status(file_hash):
+    result = check_vt_status(file_hash)
+    return render_template('result.html', result=result, file_hash=file_hash)
+
+@app.route('/stats')
+def stats():
+    conn = sqlite3.connect('scan_stats.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+    html = "<html><body style='font-family:sans-serif; padding:20px;'><h1>Scan Stats</h1><table border='1' cellpadding='10'><tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>" + "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows]) + "</table></body></html>"
+    return render_template_string(html)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
