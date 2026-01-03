@@ -165,7 +165,7 @@ def generate_html_email(subject, items):
                 </table>
 
                 <div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">
-                    Powered by VirusTotal | CheckIfSafe.com
+                    Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com
                 </div>
             </div>
         </body>
@@ -289,3 +289,4 @@ def scan_status(file_hash):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
