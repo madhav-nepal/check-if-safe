@@ -18,22 +18,31 @@ from imbox import Imbox
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
 
-# NEW: Put DB inside a folder so Docker Volume works
+# 1. Define DB Folder logic
 DB_FOLDER = 'db'
 DB_FILE = os.path.join(DB_FOLDER, 'scan_stats.db')
+
+# 2. Define Max File Size (32MB) - MUST BE HERE
+MAX_FILE_SIZE = 32 * 1024 * 1024 
 
 VT_API_KEY = os.environ.get('VT_API_KEY')
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
 
-# SECURITY & SKIPPED DOMAINS... (Keep the rest the same)
+# SKIPPED DOMAINS
+SKIP_DOMAINS = [
+    'facebook.com', 'www.facebook.com', 'twitter.com', 'www.twitter.com', 'x.com',
+    'instagram.com', 'www.instagram.com', 'linkedin.com', 'www.linkedin.com',
+    'youtube.com', 'www.youtube.com', 'google.com', 'www.google.com',
+    'apple.com', 'www.apple.com', 'microsoft.com', 'www.microsoft.com'
+]
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE 
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE # Now this will work!
 
-# NEW: Create the DB folder if missing
+# Create Directories if missing
 if not os.path.exists(DB_FOLDER):
     os.makedirs(DB_FOLDER)
 
@@ -54,7 +63,6 @@ init_db()
 def log_scan(sender, filename, result):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Format: YYYY-MM-DD HH:MM:SS
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("INSERT INTO scans (date, sender, filename, result) VALUES (?, ?, ?, ?)", 
               (date_str, sender, filename, result))
@@ -146,9 +154,9 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
-    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal / Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
 
-# --- BACKUP ROBOT (365 DAYS) ---
+# --- BACKUP ROBOT ---
 def backup_task():
     BACKUP_DIR = os.path.join(os.getcwd(), 'backups')
     if not os.path.exists(BACKUP_DIR):
@@ -252,7 +260,7 @@ def email_listener():
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE" if res['status'] == 'finished' else "QUEUED"
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
-                            log_scan(sender, fname, status) # Log to DB
+                            log_scan(sender, fname, status)
                     
                     # 3. SEND REPLY
                     if scan_items:
@@ -289,7 +297,6 @@ def index():
         status = check_vt_file(file_hash)
         if status['status'] == 'queued': upload_file_vt(file_path)
         
-        # Log manual web scan too
         log_scan("Web User", filename, "QUEUED")
         
         if os.path.exists(file_path): os.remove(file_path)
@@ -310,20 +317,16 @@ def stats():
     c = conn.cursor()
     
     if start_date and end_date:
-        # User requested a range (e.g. 2026-12-01 to 2026-12-05)
-        # We append timestamps to cover the full days
         query = "SELECT * FROM scans WHERE date >= ? AND date <= ? ORDER BY id DESC"
         c.execute(query, (f"{start_date} 00:00:00", f"{end_date} 23:59:59"))
         title = f"Stats: {start_date} to {end_date}"
     else:
-        # Default: Last 50
         c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
         title = "Recent Scan Stats (Last 50)"
 
     rows = c.fetchall()
     conn.close()
 
-    # Simple HTML Report
     table_rows = "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows])
     
     html = f"""
@@ -369,4 +372,3 @@ def stats():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
