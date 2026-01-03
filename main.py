@@ -22,7 +22,6 @@ VT_API_KEY = os.environ.get('VT_API_KEY')
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
-ALLOWED_DOMAINS = os.environ.get('ALLOWED_DOMAINS', '').split(',')
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -88,12 +87,10 @@ def upload_file_vt(filepath):
 
 # --- VT LOGIC (URLS) ---
 def scan_url_vt(target_url):
-    # 1. Encode URL to Base64 (VT Standard)
     url_id = base64.urlsafe_b64encode(target_url.encode()).decode().strip("=")
     url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
     headers = {"x-apikey": VT_API_KEY}
     
-    # 2. Check if already scanned
     response = requests.get(url, headers=headers)
     
     if response.status_code == 200:
@@ -106,16 +103,13 @@ def scan_url_vt(target_url):
             "link": f"https://www.virustotal.com/gui/url/{url_id}"
         }
     elif response.status_code == 404:
-        # 3. If new, submit it
         requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
         return {"status": "queued", "link": f"https://www.virustotal.com/gui/url/{url_id}"}
     else:
         return {"status": "error", "link": "#"}
 
-# --- EMAIL TEMPLATE (HTML) ---
+# --- EMAIL TEMPLATE ---
 def generate_html_email(subject, items):
-    # items = list of {'name': 'filename/url', 'type': 'File/Link', 'status': 'SAFE/DANGER/QUEUED', 'link': 'http...'}
-    
     rows = ""
     for item in items:
         color = "#28a745" # Green
@@ -126,7 +120,7 @@ def generate_html_email(subject, items):
             status_text = "⚠️ DANGER"
         elif item['status'] == 'QUEUED':
             color = "#007bff" # Blue
-            status_text = "⏳ ANALYZING"
+            status_text = "⏳ ANALYZING (Timed Out)"
             
         rows += f"""
         <div style="background-color: #f8f9fa; border-left: 5px solid {color}; padding: 15px; margin-bottom: 10px; border-radius: 4px;">
@@ -177,17 +171,18 @@ def email_listener():
                     
                     scan_items = []
 
-                    # 1. SCAN LINKS
+                    # 1. SCAN LINKS (With Deduplication)
                     urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', body_plain)
-                    for url in urls:
+                    unique_urls = list(set(urls)) # REMOVES DUPLICATES
+
+                    for url in unique_urls:
                         res = scan_url_vt(url)
                         status = "QUEUED"
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
-                        
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
 
-                    # 2. SCAN ATTACHMENTS
+                    # 2. SCAN ATTACHMENTS (With Wait Loop)
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
@@ -197,11 +192,22 @@ def email_listener():
                             fhash = get_file_hash(fpath)
                             res = check_vt_file(fhash)
                             
-                            status = "QUEUED"
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                            elif res['status'] == 'finished':
+                                print(f"File {fname} is new. Waiting for analysis...", flush=True)
+                                
+                                # WAIT LOOP: Check every 15s for up to 3 minutes
+                                for _ in range(12): 
+                                    time.sleep(15)
+                                    res = check_vt_file(fhash)
+                                    if res['status'] == 'finished':
+                                        break
+                            
+                            # Final Status Check after Waiting
+                            if res['status'] == 'finished':
                                 status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
+                            else:
+                                status = "QUEUED" # Timed out
                             
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
@@ -214,7 +220,7 @@ def email_listener():
                         msg['Subject'] = f"Scan Result: {subject}"
                         msg['From'] = EMAIL_USER
                         msg['To'] = sender
-                        msg.set_content("Please enable HTML to view this report.") # Fallback
+                        msg.set_content("Please enable HTML to view this report.")
                         msg.add_alternative(html_body, subtype='html')
                         
                         with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
