@@ -9,6 +9,7 @@ import datetime
 import fcntl
 import re
 import base64
+from urllib.parse import urlparse
 from email.message import EmailMessage
 from flask import Flask, render_template, request, redirect, url_for, render_template_string
 from werkzeug.utils import secure_filename
@@ -17,11 +18,21 @@ from imbox import Imbox
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
 VT_API_KEY = os.environ.get('VT_API_KEY')
-
-# Email Config
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
+
+# SKIPPED DOMAINS (Don't waste time scanning these)
+SKIP_DOMAINS = [
+    'facebook.com', 'www.facebook.com',
+    'twitter.com', 'www.twitter.com', 'x.com',
+    'instagram.com', 'www.instagram.com',
+    'linkedin.com', 'www.linkedin.com',
+    'youtube.com', 'www.youtube.com',
+    'google.com', 'www.google.com',
+    'apple.com', 'www.apple.com',
+    'microsoft.com', 'www.microsoft.com'
+]
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -49,7 +60,7 @@ def log_scan(sender, filename, result):
     conn.commit()
     conn.close()
 
-# --- VT LOGIC (FILES) ---
+# --- VT LOGIC ---
 def get_file_hash(filepath):
     sha256_hash = hashlib.sha256()
     with open(filepath, "rb") as f:
@@ -60,23 +71,22 @@ def get_file_hash(filepath):
 def check_vt_file(file_hash):
     url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
     headers = {"x-apikey": VT_API_KEY}
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code == 200:
-        data = response.json().get("data", {}).get("attributes", {})
-        stats = data.get("last_analysis_stats", {})
-        total = sum(stats.values())
-        if total < 5: return {"status": "queued"}
-        return {
-            "status": "finished",
-            "malicious": stats.get("malicious", 0),
-            "harmless": stats.get("harmless", 0),
-            "link": f"https://www.virustotal.com/gui/file/{file_hash}"
-        }
-    elif response.status_code == 404:
-        return {"status": "queued"}
-    else:
-        return {"status": "error"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json().get("data", {}).get("attributes", {})
+            stats = data.get("last_analysis_stats", {})
+            total = sum(stats.values())
+            if total < 5: return {"status": "queued"}
+            return {
+                "status": "finished",
+                "malicious": stats.get("malicious", 0),
+                "link": f"https://www.virustotal.com/gui/file/{file_hash}"
+            }
+        elif response.status_code == 404:
+            return {"status": "queued"}
+    except: pass
+    return {"status": "error"}
 
 def upload_file_vt(filepath):
     url = "https://www.virustotal.com/api/v3/files"
@@ -85,14 +95,13 @@ def upload_file_vt(filepath):
         files = {"file": (os.path.basename(filepath), file)}
         requests.post(url, headers=headers, files=files)
 
-# --- VT LOGIC (URLS) ---
 def scan_url_vt(target_url):
     try:
         url_id = base64.urlsafe_b64encode(target_url.encode()).decode().strip("=")
         url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
         headers = {"x-apikey": VT_API_KEY}
         
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json().get("data", {}).get("attributes", {})
@@ -100,48 +109,63 @@ def scan_url_vt(target_url):
             return {
                 "status": "finished",
                 "malicious": stats.get("malicious", 0),
-                "harmless": stats.get("harmless", 0),
                 "link": f"https://www.virustotal.com/gui/url/{url_id}"
             }
         elif response.status_code == 404:
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
             return {"status": "queued", "link": f"https://www.virustotal.com/gui/url/{url_id}"}
-        else:
-            return {"status": "error", "link": "#"}
-    except Exception:
-        return {"status": "error", "link": "#"}
+    except: pass
+    return {"status": "error", "link": "#"}
 
-# --- EMAIL TEMPLATE ---
+# --- COMPACT EMAIL TEMPLATE ---
 def generate_html_email(subject, items):
     rows = ""
     for item in items:
-        color = "#28a745" # Green
-        status_text = "✅ SAFE"
-        
+        # Determine Color & Badge
         if item['status'] == 'DANGER':
-            color = "#dc3545" # Red
-            status_text = "⚠️ DANGER"
+            badge_style = "background-color: #dc3545; color: white; border: 1px solid #dc3545;"
+            badge_text = "⚠️ DANGER"
         elif item['status'] == 'QUEUED':
-            color = "#007bff" # Blue
-            status_text = "⏳ ANALYZING (Click to Monitor)"
+            badge_style = "background-color: #ffc107; color: #212529; border: 1px solid #ffc107;"
+            badge_text = "⏳ ANALYZING"
+        else: # SAFE
+            badge_style = "background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #1e8e3e;"
+            badge_text = "✅ SAFE"
             
+        # Truncate long URLs for display
+        display_name = item['name']
+        if len(display_name) > 50: display_name = display_name[:47] + "..."
+
         rows += f"""
-        <div style="background-color: #f8f9fa; border-left: 5px solid {color}; padding: 15px; margin-bottom: 10px; border-radius: 4px;">
-            <strong style="color: #333;">{item['type']}:</strong> {item['name']}<br>
-            <strong style="color: {color}; font-size: 16px;">{status_text}</strong><br>
-            <a href="{item['link']}" style="color: #666; font-size: 12px; text-decoration: none;">View Full Report</a>
-        </div>
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 12px 5px; color: #555;">
+                <span style="font-size: 11px; color: #999; text-transform: uppercase; font-weight: bold; display: block;">{item['type']}</span>
+                <span style="font-size: 14px; color: #333;">{display_name}</span>
+            </td>
+            <td style="padding: 12px 5px; text-align: right;">
+                <a href="{item['link']}" style="text-decoration: none; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; font-family: sans-serif; {badge_style}">
+                    {badge_text}
+                </a>
+            </td>
+        </tr>
         """
 
     return f"""
     <html>
-        <body style="font-family: 'Segoe UI', sans-serif; background-color: #f4f4f4; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-                <h2 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px;">Scan Results</h2>
-                <p style="color: #666;">Here is the security analysis for: <strong>{subject}</strong></p>
-                {rows}
-                <div style="margin-top: 30px; font-size: 12px; color: #999; text-align: center;">
-                    Powered by VirusTotal | CheckIfSafe
+        <body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;">
+            <div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+                <h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3>
+                
+                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">
+                    Analysis for: <strong>{subject}</strong>
+                </p>
+
+                <table style="width: 100%; border-collapse: collapse;">
+                    {rows}
+                </table>
+
+                <div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">
+                    Powered by VirusTotal | CheckIfSafe.com
                 </div>
             </div>
         </body>
@@ -153,10 +177,8 @@ def email_listener():
     lock_file = open("email_bot.lock", "w")
     try:
         fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        print("--- ROBOT: I am the Master. Starting loop... ---", flush=True)
-    except IOError:
-        print("--- ROBOT: Slave mode. Sleeping. ---", flush=True)
-        return
+        print("--- ROBOT: I am the Master. ---", flush=True)
+    except IOError: return
 
     while True:
         try:
@@ -170,22 +192,27 @@ def email_listener():
                     sender = message.sent_from[0]['email']
                     subject = message.subject
                     body_plain = message.body['plain'][0] if message.body['plain'] else ""
-                    print(f"Processing email from {sender}", flush=True)
+                    print(f"Processing {sender}...", flush=True)
                     
                     scan_items = []
 
-                    # 1. SCAN LINKS
+                    # 1. SCAN LINKS (Filtered)
                     urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', body_plain)
                     unique_urls = list(set(urls)) 
 
                     for url in unique_urls:
+                        # FILTER: Skip social media domains
+                        domain = urlparse(url).netloc.lower()
+                        if any(skip in domain for skip in SKIP_DOMAINS):
+                            continue # Skip this loop
+                            
                         res = scan_url_vt(url)
                         status = "QUEUED"
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
 
-                    # 2. SCAN ATTACHMENTS (Optimized Wait Loop)
+                    # 2. SCAN ATTACHMENTS (Fast Wait: 30s Max)
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
@@ -195,26 +222,23 @@ def email_listener():
                             fhash = get_file_hash(fpath)
                             res = check_vt_file(fhash)
                             
-                            status = "QUEUED"
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                print(f"File {fname} is new. Waiting for analysis (Max 60s)...", flush=True)
-                                
-                                # OPTIMIZED LOOP: Check every 10s, Max 6 times (60s total)
-                                for _ in range(6): 
+                                # FAST LOOP: Check every 10s, Max 3 times (30s Total)
+                                for _ in range(3): 
                                     time.sleep(10) 
                                     res = check_vt_file(fhash)
-                                    if res['status'] == 'finished':
-                                        status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
-                                        break
-                            else:
-                                status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
+                                    if res['status'] == 'finished': break
                             
-                            # If still queued after 60s, it stays "QUEUED"
+                            if res['status'] == 'finished':
+                                status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
+                            else:
+                                status = "QUEUED"
+                            
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
                     
-                    # 3. SEND HTML REPLY
+                    # 3. SEND COMPACT REPLY
                     if scan_items:
                         html_body = generate_html_email(subject, scan_items)
                         
