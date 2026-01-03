@@ -1,0 +1,21 @@
+# Use a lightweight Python image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Create uploads folder manually to avoid permission issues
+RUN mkdir -p uploads
+
+# Expose port 5000
+EXPOSE 5000
+
+# Run with Gunicorn (Professional Server)
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "main:app"]

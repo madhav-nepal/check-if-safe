@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virus Scanner - Secure Upload</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .upload-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; width: 400px; }
+        h1 { margin-bottom: 20px; color: #333; }
+        .file-drop-area { border: 2px dashed #ccc; padding: 30px; border-radius: 8px; margin-bottom: 20px; transition: 0.3s; cursor: pointer; }
+        .file-drop-area:hover { border-color: #007bff; background-color: #f8f9fa; }
+        input[type="file"] { display: none; }
+        .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; transition: background 0.3s; }
+        .btn:hover { background-color: #0056b3; }
+        .footer { margin-top: 20px; font-size: 12px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="upload-box">
+        <h1>🔍 Secure Scanner</h1>
+        <p style="color: #666; margin-bottom: 25px;">Upload a file to scan for malware using VirusTotal.</p>
+        
+        <form action="/" method="post" enctype="multipart/form-data">
+            <label class="file-drop-area">
+                <span id="file-label">Click to select a file</span>
+                <input type="file" name="file" id="file" required onchange="document.getElementById('file-label').innerText = this.files[0].name">
+            </label>
+            <button type="submit" class="btn">Scan File</button>
+        </form>
+
+        <div class="footer">
+            &copy; 2025 Project By Madhav Nepal
+        </div>
+    </div>
+</body>
+</html>

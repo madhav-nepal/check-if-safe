@@ -1,0 +1,88 @@
+import os
+import hashlib
+import requests
+from flask import Flask, render_template, request, redirect
+from werkzeug.utils import secure_filename
+
+# --- CONFIGURATION ---
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'exe', 'dll', 'pdf', 'docx', 'doc', 'zip', 'rar', 'jpg', 'png', 'txt'}
+VT_API_KEY = os.environ.get('VT_API_KEY')
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_file_report(filepath):
+    # Calculate Hash
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    file_hash = sha256_hash.hexdigest()
+
+    # Check VirusTotal
+    url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
+    headers = {"x-apikey": VT_API_KEY}
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        data = response.json().get("data", {}).get("attributes", {})
+        return {
+            "id": response.json().get("data", {}).get("id"),
+            "stats": data.get("last_analysis_stats", {}),
+            "link": f"https://www.virustotal.com/gui/file/{file_hash}",
+            "filename": os.path.basename(filepath)
+        }
+    elif response.status_code == 404:
+        return {"error": "File not found in VT database"}
+    else:
+        return {"error": f"API Error: {response.status_code}"}
+
+def scan_file(filepath):
+    url = "https://www.virustotal.com/api/v3/files"
+    headers = {"x-apikey": VT_API_KEY}
+    with open(filepath, "rb") as file:
+        files = {"file": (os.path.basename(filepath), file)}
+        response = requests.post(url, headers=headers, files=files)
+    
+    if response.status_code == 200:
+        return {"scan_id": response.json().get("data", {}).get("id")}
+    else:
+        return {"error": f"Upload failed: {response.status_code}"}
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        if 'file' not in request.files: return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '' or not allowed_file(file.filename): return redirect(request.url)
+
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        try:
+            result = get_file_report(file_path)
+            if result.get("error") == "File not found in VT database":
+                scan_result = scan_file(file_path)
+                if "scan_id" in scan_result:
+                     result = {"message": "File uploaded. Analysis in progress. Check back later."}
+                else:
+                    result = scan_result
+        except Exception as e:
+            result = {"error": str(e)}
+        finally:
+            if os.path.exists(file_path): os.remove(file_path)
+
+        return render_template('result.html', result=result, filename=filename)
+
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
