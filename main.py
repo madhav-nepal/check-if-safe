@@ -150,47 +150,17 @@ def email_listener():
         
         time.sleep(10) # Check every 10 seconds
 
-# Start Email Thread only if User/Pass exists
-if os.environ.get('EMAIL_USER'):
+# --- DEBUG SECTION ---
+# This forces Python to print to the logs immediately (flush=True)
+email_user = os.environ.get('EMAIL_USER')
+print(f"--- SYSTEM CHECK: Email User Detected? {'YES' if email_user else 'NO'} ---", flush=True)
+
+if email_user:
+    print("--- SYSTEM CHECK: Starting Email Robot Thread... ---", flush=True)
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
-
-# --- WEB ROUTES ---
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    if request.method == 'POST':
-        if 'file' not in request.files: return redirect(request.url)
-        file = request.files['file']
-        if file.filename == '': return redirect(request.url)
-        
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-
-        file_hash = get_file_hash(file_path)
-        status = check_vt_status(file_hash)
-        if status['status'] == 'queued':
-            upload_to_vt(file_path)
-
-        if os.path.exists(file_path): os.remove(file_path)
-        return redirect(url_for('scan_status', file_hash=file_hash))
-
-    return render_template('index.html')
-
-@app.route('/scan/<file_hash>')
-def scan_status(file_hash):
-    result = check_vt_status(file_hash)
-    return render_template('result.html', result=result, file_hash=file_hash)
-
-@app.route('/stats')
-def stats():
-    conn = sqlite3.connect('scan_stats.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
-    rows = c.fetchall()
-    conn.close()
-    html = "<html><body style='font-family:sans-serif; padding:20px;'><h1>Scan Stats</h1><table border='1' cellpadding='10'><tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>" + "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows]) + "</table></body></html>"
-    return render_template_string(html)
+else:
+    print("--- SYSTEM CHECK: Email Robot SKIPPED (EMAIL_USER is missing) ---", flush=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
