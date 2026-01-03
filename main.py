@@ -1,13 +1,25 @@
 import os
 import hashlib
 import requests
-from flask import Flask, render_template, request, redirect
+import smtplib
+import threading
+import time
+import sqlite3
+import datetime
+from email.message import EmailMessage
+from flask import Flask, render_template, request, redirect, url_for, render_template_string
 from werkzeug.utils import secure_filename
+from imbox import Imbox
 
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'exe', 'dll', 'pdf', 'docx', 'doc', 'zip', 'rar', 'jpg', 'png', 'txt'}
 VT_API_KEY = os.environ.get('VT_API_KEY')
+
+# Email Config
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'ssl0.ovh.net')
+EMAIL_USER = os.environ.get('EMAIL_USER')
+EMAIL_PASS = os.environ.get('EMAIL_PASS')
+ALLOWED_DOMAINS = os.environ.get('ALLOWED_DOMAINS', '').split(',')
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -15,74 +27,158 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# --- DATABASE ---
+def init_db():
+    conn = sqlite3.connect('scan_stats.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS scans 
+                 (id INTEGER PRIMARY KEY, date TEXT, sender TEXT, filename TEXT, result TEXT)''')
+    conn.commit()
+    conn.close()
 
-def get_file_report(filepath):
-    # Calculate Hash
+init_db()
+
+def log_scan(sender, filename, result):
+    conn = sqlite3.connect('scan_stats.db')
+    c = conn.cursor()
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT INTO scans (date, sender, filename, result) VALUES (?, ?, ?, ?)", 
+              (date_str, sender, filename, result))
+    conn.commit()
+    conn.close()
+
+# --- VT LOGIC ---
+def get_file_hash(filepath):
     sha256_hash = hashlib.sha256()
     with open(filepath, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
-    file_hash = sha256_hash.hexdigest()
+    return sha256_hash.hexdigest()
 
-    # Check VirusTotal
+def check_vt_status(file_hash):
     url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
     headers = {"x-apikey": VT_API_KEY}
     response = requests.get(url, headers=headers)
     
     if response.status_code == 200:
         data = response.json().get("data", {}).get("attributes", {})
+        stats = data.get("last_analysis_stats", {})
+        # Check if analysis is actually done (if all stats are 0, it might be queued)
+        total_scans = sum(stats.values())
+        if total_scans < 5: 
+            return {"status": "queued"}
+            
         return {
-            "id": response.json().get("data", {}).get("id"),
-            "stats": data.get("last_analysis_stats", {}),
+            "status": "finished",
+            "malicious": stats.get("malicious", 0),
+            "suspicious": stats.get("suspicious", 0),
+            "harmless": stats.get("harmless", 0),
             "link": f"https://www.virustotal.com/gui/file/{file_hash}",
-            "filename": os.path.basename(filepath)
+            "id": response.json().get("data", {}).get("id")
         }
     elif response.status_code == 404:
-        return {"error": "File not found in VT database"}
+        return {"status": "queued"} # Not found means it's still processing upload
     else:
-        return {"error": f"API Error: {response.status_code}"}
+        return {"status": "error", "message": f"API Error: {response.status_code}"}
 
-def scan_file(filepath):
+def upload_to_vt(filepath):
     url = "https://www.virustotal.com/api/v3/files"
     headers = {"x-apikey": VT_API_KEY}
     with open(filepath, "rb") as file:
         files = {"file": (os.path.basename(filepath), file)}
-        response = requests.post(url, headers=headers, files=files)
-    
-    if response.status_code == 200:
-        return {"scan_id": response.json().get("data", {}).get("id")}
-    else:
-        return {"error": f"Upload failed: {response.status_code}"}
+        requests.post(url, headers=headers, files=files)
 
+# --- EMAIL LISTENER (Background) ---
+def send_reply(to_email, subject, body):
+    try:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_USER
+        msg['To'] = to_email
+        with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"Email Error: {e}")
+
+def email_listener():
+    while True:
+        try:
+            if not EMAIL_USER: 
+                time.sleep(60)
+                continue
+            with Imbox(EMAIL_HOST, username=EMAIL_USER, password=EMAIL_PASS, ssl=True, ssl_context=None, starttls=False) as imbox:
+                unread_msgs = imbox.messages(unread=True)
+                for uid, message in unread_msgs:
+                    sender = message.sent_from[0]['email']
+                    if not message.attachments: continue
+                    
+                    summary = []
+                    for attachment in message.attachments:
+                        fname = secure_filename(attachment.get('filename'))
+                        fpath = os.path.join(UPLOAD_FOLDER, fname)
+                        with open(fpath, "wb") as f: f.write(attachment.get('content').read())
+                        
+                        fhash = get_file_hash(fpath)
+                        res = check_vt_status(fhash)
+                        if res['status'] == 'queued': upload_to_vt(fpath)
+                        
+                        # Note: Email bot doesn't wait for queue, it just reports current status
+                        res_text = "Analysis Queued" if res['status'] == 'queued' else ("❌ MALICIOUS" if res.get('malicious', 0) > 0 else "✅ SAFE")
+                        summary.append(f"{fname}: {res_text}")
+                        log_scan(sender, fname, res_text)
+                        if os.path.exists(fpath): os.remove(fpath)
+                    
+                    send_reply(sender, f"Scan Result: {message.subject}", "\n".join(summary))
+                    imbox.mark_seen(uid)
+        except Exception: pass
+        time.sleep(10)
+
+if os.environ.get('EMAIL_USER'):
+    t = threading.Thread(target=email_listener, daemon=True)
+    t.start()
+
+# --- WEB ROUTES ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         if 'file' not in request.files: return redirect(request.url)
         file = request.files['file']
-        if file.filename == '' or not allowed_file(file.filename): return redirect(request.url)
-
+        if file.filename == '': return redirect(request.url)
+        
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
 
-        try:
-            result = get_file_report(file_path)
-            if result.get("error") == "File not found in VT database":
-                scan_result = scan_file(file_path)
-                if "scan_id" in scan_result:
-                     result = {"message": "File uploaded. Analysis in progress. Check back later."}
-                else:
-                    result = scan_result
-        except Exception as e:
-            result = {"error": str(e)}
-        finally:
-            if os.path.exists(file_path): os.remove(file_path)
+        # 1. Calculate Hash
+        file_hash = get_file_hash(file_path)
 
-        return render_template('result.html', result=result, filename=filename)
+        # 2. Check if exists, if not upload
+        status = check_vt_status(file_hash)
+        if status['status'] == 'queued':
+            upload_to_vt(file_path)
+
+        # 3. Clean up and Redirect to Status Page
+        if os.path.exists(file_path): os.remove(file_path)
+        return redirect(url_for('scan_status', file_hash=file_hash))
 
     return render_template('index.html')
+
+@app.route('/scan/<file_hash>')
+def scan_status(file_hash):
+    result = check_vt_status(file_hash)
+    return render_template('result.html', result=result, file_hash=file_hash)
+
+@app.route('/stats')
+def stats():
+    conn = sqlite3.connect('scan_stats.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+    html = "<html><body style='font-family:sans-serif; padding:20px;'><h1>Scan Stats</h1><table border='1' cellpadding='10'><tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>" + "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows]) + "</table></body></html>"
+    return render_template_string(html)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
