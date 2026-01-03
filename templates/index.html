@@ -3,62 +3,122 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Check If Safe | Know Before You Click</title>
+    <title>Check If Safe | Email Security Scanner</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        
-        /* 1. MAIN BOX: Reduced from 600px to 550px */
-        .upload-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; width: 550px; }
-        
-        .main-icon { font-size: 48px; display: block; margin-bottom: 10px; }
-        
-        h1 { margin-bottom: 10px; color: #333; font-size: 24px; white-space: nowrap; }
-        p.subtitle { color: #666; margin-bottom: 30px; font-size: 14px; line-height: 1.5; }
-        
-        /* 2. UPLOAD AREA: Width set to 50% to match button, and Centered */
-        .file-drop-area { 
-            border: 2px dashed #ccc; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 20px auto 25px auto; /* Centered */
-            transition: 0.3s; 
-            cursor: pointer; 
-            display: block; 
-            width: 50%; /* Matches button width */
-            box-sizing: border-box; /* Ensures padding doesn't make it wider than 50% */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #333;
         }
-        .file-drop-area:hover { border-color: #007bff; background-color: #f8f9fa; }
-        
-        input[type="file"] { display: none; }
-        
-        /* SCAN BUTTON */
-        .btn { background-color: #007bff; color: white; border: none; padding: 12px 0; border-radius: 6px; cursor: pointer; font-size: 16px; width: 50%; margin: 0 auto; display: block; transition: background 0.3s; }
-        .btn:hover { background-color: #0056b3; }
-        
-        .footer { margin-top: 40px; font-size: 12px; color: #aaa; }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            text-align: center;
+            max-width: 450px;
+            width: 90%;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+        p.subtitle {
+            color: #7f8c8d;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #bdc3c7;
+            border-radius: 8px;
+            padding: 30px 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            background: #fafafa;
+        }
+        .upload-area:hover {
+            border-color: #3498db;
+            background: #ecf0f1;
+        }
+        input[type="file"] {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-label {
+            font-size: 16px;
+            color: #7f8c8d;
+            
+            /* TRUNCATE LONG FILENAMES */
+            white-space: nowrap; 
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            display: block;
+        }
+        .btn-scan {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 20px;
+            width: 100%;
+            transition: background 0.3s;
+        }
+        .btn-scan:hover {
+            background-color: #0056b3;
+        }
+        .footer {
+            margin-top: 25px;
+            font-size: 11px;
+            color: #bdc3c7;
+        }
+        .icon {
+            font-size: 40px;
+            color: #3498db;
+            margin-bottom: 15px;
+        }
     </style>
+    <script>
+        function updateFileName(input) {
+            var fileName = input.files[0].name;
+            document.getElementById('file-label').innerText = fileName;
+        }
+    </script>
 </head>
 <body>
-    <div class="upload-box">
-        <span class="main-icon">🛡️</span>
 
+    <div class="container">
+        <div class="icon">🛡️</div>
         <h1>Check If Safe | Know Before You Click</h1>
-        
         <p class="subtitle">Learn how to save time by automating suspicious email scans.</p>
-        
+
         <form action="/" method="post" enctype="multipart/form-data">
-            <label class="file-drop-area">
-                <span id="file-label">Click to select a file</span>
-                <input type="file" name="file" id="file" required onchange="document.getElementById('file-label').innerText = this.files[0].name">
-            </label>
-            
-            <button type="submit" class="btn">Scan File</button>
+            <div class="upload-area">
+                <input type="file" name="file" required onchange="updateFileName(this)">
+                <div class="file-label" id="file-label">Drag & Drop or Click to Upload File</div>
+            </div>
+            <button type="submit" class="btn-scan">Scan File</button>
         </form>
 
         <div class="footer">
-            &copy; 2025 Madhav Nepal | Powered By VirusTotal
+            &copy; 2026 Madhav Nepal | Powered By VirusTotal
         </div>
     </div>
+
 </body>
 </html>
-
