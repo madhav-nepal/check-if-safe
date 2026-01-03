@@ -19,3 +19,4 @@ EXPOSE 5000
 
 # Run with Gunicorn (Professional Server)
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "main:app"]
+# Force rebuild
