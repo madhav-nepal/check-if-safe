@@ -17,26 +17,25 @@ from imbox import Imbox
 
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
-DB_FILE = 'scan_stats.db'
+
+# NEW: Put DB inside a folder so Docker Volume works
+DB_FOLDER = 'db'
+DB_FILE = os.path.join(DB_FOLDER, 'scan_stats.db')
+
 VT_API_KEY = os.environ.get('VT_API_KEY')
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
 
-# SECURITY: MAX FILE SIZE (32 MB)
-MAX_FILE_SIZE = 32 * 1024 * 1024 
-
-# SKIPPED DOMAINS
-SKIP_DOMAINS = [
-    'facebook.com', 'www.facebook.com', 'twitter.com', 'www.twitter.com', 'x.com',
-    'instagram.com', 'www.instagram.com', 'linkedin.com', 'www.linkedin.com',
-    'youtube.com', 'www.youtube.com', 'google.com', 'www.google.com',
-    'apple.com', 'www.apple.com', 'microsoft.com', 'www.microsoft.com'
-]
+# SECURITY & SKIPPED DOMAINS... (Keep the rest the same)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE 
+
+# NEW: Create the DB folder if missing
+if not os.path.exists(DB_FOLDER):
+    os.makedirs(DB_FOLDER)
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -370,3 +369,4 @@ def stats():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
