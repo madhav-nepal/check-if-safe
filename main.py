@@ -42,12 +42,8 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE 
 
-# Create Directories if missing
-if not os.path.exists(DB_FOLDER):
-    os.makedirs(DB_FOLDER)
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(DB_FOLDER): os.makedirs(DB_FOLDER)
+if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 
 # --- DATABASE ---
 def init_db():
@@ -90,8 +86,8 @@ def check_vt_file(file_hash):
             return {
                 "status": "finished",
                 "malicious": stats.get("malicious", 0),
-                "suspicious": stats.get("suspicious", 0), # FIXED: Added missing key
-                "harmless": stats.get("harmless", 0),     # FIXED: Added missing key
+                "suspicious": stats.get("suspicious", 0),
+                "harmless": stats.get("harmless", 0),
                 "link": f"https://www.virustotal.com/gui/file/{file_hash}"
             }
         elif response.status_code == 404:
@@ -111,20 +107,43 @@ def scan_url_vt(target_url):
         url_id = base64.urlsafe_b64encode(target_url.encode()).decode().strip("=")
         url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
         headers = {"x-apikey": VT_API_KEY}
+        
+        # 1. Check existing report
         response = requests.get(url, headers=headers, timeout=10)
+        
         if response.status_code == 200:
             data = response.json().get("data", {}).get("attributes", {})
             stats = data.get("last_analysis_stats", {})
             return {
                 "status": "finished",
                 "malicious": stats.get("malicious", 0),
-                "suspicious": stats.get("suspicious", 0), # FIXED: Added missing key
-                "harmless": stats.get("harmless", 0),     # FIXED: Added missing key
+                "suspicious": stats.get("suspicious", 0),
+                "harmless": stats.get("harmless", 0),
                 "link": f"https://www.virustotal.com/gui/url/{url_id}"
             }
         elif response.status_code == 404:
+            # 2. Submit New URL
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
+            
+            # 3. NEW: Wait Loop for URL (Max 30s)
+            print(f"URL {target_url} is new. Waiting...", flush=True)
+            for _ in range(6): # 6 checks * 5 seconds = 30s
+                time.sleep(5)
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json().get("data", {}).get("attributes", {})
+                    stats = data.get("last_analysis_stats", {})
+                    if sum(stats.values()) > 0: # Ensure scan is actually done
+                        return {
+                            "status": "finished",
+                            "malicious": stats.get("malicious", 0),
+                            "suspicious": stats.get("suspicious", 0),
+                            "harmless": stats.get("harmless", 0),
+                            "link": f"https://www.virustotal.com/gui/url/{url_id}"
+                        }
+
             return {"status": "queued", "link": f"https://www.virustotal.com/gui/url/{url_id}"}
+            
     except: pass
     return {"status": "error", "link": "#"}
 
@@ -163,51 +182,39 @@ def generate_html_email(subject, items):
 # --- BACKUP ROBOT ---
 def backup_task():
     BACKUP_DIR = os.path.join(os.getcwd(), 'backups')
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
+    if not os.path.exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
 
     while True:
-        # Sleep for 24 hours (86400 seconds)
-        time.sleep(86400)
-        
+        time.sleep(86400) # 24 Hours
         try:
             if not os.path.exists(DB_FILE): continue
-
-            # 1. Generate Filename (e.g., backups/backup_2026-01-03.db)
             date_str = datetime.datetime.now().strftime('%Y-%m-%d')
             backup_path = os.path.join(BACKUP_DIR, f"backup_{date_str}.db")
 
-            # 2. Perform Hot Backup
             src = sqlite3.connect(DB_FILE)
             dst = sqlite3.connect(backup_path)
             with dst: src.backup(dst)
             dst.close()
             src.close()
             
-            print(f"--- BACKUP: Saved to {backup_path} ---", flush=True)
-
-            # 3. Clean up Old Backups (> 365 Days)
+            # Clean up old
             now = time.time()
-            cutoff = now - (365 * 86400) # 365 Days
+            cutoff = now - (365 * 86400)
             for filename in os.listdir(BACKUP_DIR):
-                file_path = os.path.join(BACKUP_DIR, filename)
-                if os.path.getmtime(file_path) < cutoff:
-                    os.remove(file_path)
-                    print(f"--- BACKUP: Deleted old file {filename} ---", flush=True)
+                if os.path.getmtime(os.path.join(BACKUP_DIR, filename)) < cutoff:
+                    os.remove(os.path.join(BACKUP_DIR, filename))
 
-            # 4. Send "Success" Email
+            # Email Notify
             if EMAIL_USER:
                 msg = EmailMessage()
                 msg['Subject'] = f"✅ Backup Success: {date_str}"
                 msg['From'] = EMAIL_USER
                 msg['To'] = EMAIL_USER 
-                msg.set_content(f"Database backed up to server.\nFile: {backup_path}")
+                msg.set_content(f"Database backed up.\nFile: {backup_path}")
                 with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
                     smtp.login(EMAIL_USER, EMAIL_PASS)
                     smtp.send_message(msg)
-
-        except Exception as e:
-            print(f"--- BACKUP ERROR: {e} ---", flush=True)
+        except: pass
 
 # --- EMAIL LISTENER ---
 def email_listener():
@@ -217,13 +224,12 @@ def email_listener():
         print("--- ROBOT: I am the Master. ---", flush=True)
         t_backup = threading.Thread(target=backup_task, daemon=True)
         t_backup.start()
-        print("--- BACKUP: Robot started (Daily). ---", flush=True)
     except IOError: return
 
     while True:
         try:
             if not EMAIL_USER: 
-                time.sleep(60)
+                time.sleep(30)
                 continue
             
             with Imbox(EMAIL_HOST, username=EMAIL_USER, password=EMAIL_PASS, ssl=True, ssl_context=None, starttls=False) as imbox:
@@ -241,13 +247,16 @@ def email_listener():
                     for url in unique_urls:
                         domain = urlparse(url).netloc.lower()
                         if any(skip in domain for skip in SKIP_DOMAINS): continue
+                        
+                        # This now has a 30s Wait Loop inside
                         res = scan_url_vt(url)
+                        
                         status = "QUEUED"
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
 
-                    # 2. SCAN ATTACHMENTS
+                    # 2. SCAN ATTACHMENTS (Optimized Wait)
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
@@ -257,8 +266,9 @@ def email_listener():
                             res = check_vt_file(fhash)
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                for _ in range(3): 
-                                    time.sleep(10) 
+                                # OPTIMIZED LOOP: Check every 5s (Faster!) for 60s
+                                for _ in range(12): 
+                                    time.sleep(5) 
                                     res = check_vt_file(fhash)
                                     if res['status'] == 'finished': break
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE" if res['status'] == 'finished' else "QUEUED"
@@ -281,13 +291,15 @@ def email_listener():
                         imbox.mark_seen(uid)
                         print(f"Reply sent to {sender}", flush=True)
         except Exception as e: print(f"Error: {e}", flush=True)
-        time.sleep(10)
+        
+        # CHECK INBOX FASTER (Every 5 seconds)
+        time.sleep(5)
 
 if os.environ.get('EMAIL_USER'):
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
 
-# --- WEB ROUTES ---
+# --- WEB ROUTES (Same as before) ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -300,9 +312,7 @@ def index():
         file_hash = get_file_hash(file_path)
         status = check_vt_file(file_hash)
         if status['status'] == 'queued': upload_file_vt(file_path)
-        
         log_scan("Web User", filename, "QUEUED")
-        
         if os.path.exists(file_path): os.remove(file_path)
         return redirect(url_for('scan_status', file_hash=file_hash))
     return render_template('index.html')
@@ -316,10 +326,8 @@ def scan_status(file_hash):
 def stats():
     start_date = request.args.get('start')
     end_date = request.args.get('end')
-    
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
     if start_date and end_date:
         query = "SELECT * FROM scans WHERE date >= ? AND date <= ? ORDER BY id DESC"
         c.execute(query, (f"{start_date} 00:00:00", f"{end_date} 23:59:59"))
@@ -327,51 +335,10 @@ def stats():
     else:
         c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
         title = "Recent Scan Stats (Last 50)"
-
     rows = c.fetchall()
     conn.close()
-
     table_rows = "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows])
-    
-    html = f"""
-    <html>
-        <head>
-            <title>Scan Reports</title>
-            <style>
-                body {{ font-family: 'Segoe UI', sans-serif; padding: 40px; background: #f4f4f4; }}
-                .container {{ max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                h1 {{ color: #333; }}
-                table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-                th, td {{ padding: 12px; border-bottom: 1px solid #ddd; text-align: left; }}
-                th {{ background-color: #f8f9fa; }}
-                .form-box {{ background: #e9ecef; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}
-                input[type='date'] {{ padding: 8px; border-radius: 4px; border: 1px solid #ccc; }}
-                button {{ padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🛡️ {title}</h1>
-                
-                <div class="form-box">
-                    <form action="/stats" method="get">
-                        <label>From:</label>
-                        <input type="date" name="start" required>
-                        <label>To:</label>
-                        <input type="date" name="end" required>
-                        <button type="submit">Generate Report</button>
-                        <a href="/stats" style="margin-left: 10px; color: #666; font-size: 14px;">Reset</a>
-                    </form>
-                </div>
-
-                <table border='0'>
-                    <tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>
-                    {table_rows}
-                </table>
-            </div>
-        </body>
-    </html>
-    """
+    html = f"""<html><head><title>Scan Reports</title><style>body {{ font-family: 'Segoe UI', sans-serif; padding: 40px; background: #f4f4f4; }}.container {{ max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}h1 {{ color: #333; }}table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}th, td {{ padding: 12px; border-bottom: 1px solid #ddd; text-align: left; }}th {{ background-color: #f8f9fa; }}.form-box {{ background: #e9ecef; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}input[type='date'] {{ padding: 8px; border-radius: 4px; border: 1px solid #ccc; }}button {{ padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }}</style></head><body><div class="container"><h1>🛡️ {title}</h1><div class="form-box"><form action="/stats" method="get"><label>From:</label><input type="date" name="start" required><label>To:</label><input type="date" name="end" required><button type="submit">Generate Report</button><a href="/stats" style="margin-left: 10px; color: #666; font-size: 14px;">Reset</a></form></div><table border='0'><tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>{table_rows}</table></div></body></html>"""
     return render_template_string(html)
 
 if __name__ == '__main__':
