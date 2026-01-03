@@ -22,7 +22,7 @@ UPLOAD_FOLDER = 'uploads'
 DB_FOLDER = 'db'
 DB_FILE = os.path.join(DB_FOLDER, 'scan_stats.db')
 
-# 2. Define Max File Size (32MB) - MUST BE HERE
+# 2. Define Max File Size (32MB)
 MAX_FILE_SIZE = 32 * 1024 * 1024 
 
 VT_API_KEY = os.environ.get('VT_API_KEY')
@@ -40,7 +40,7 @@ SKIP_DOMAINS = [
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE # Now this will work!
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE 
 
 # Create Directories if missing
 if not os.path.exists(DB_FOLDER):
@@ -90,6 +90,8 @@ def check_vt_file(file_hash):
             return {
                 "status": "finished",
                 "malicious": stats.get("malicious", 0),
+                "suspicious": stats.get("suspicious", 0), # FIXED: Added missing key
+                "harmless": stats.get("harmless", 0),     # FIXED: Added missing key
                 "link": f"https://www.virustotal.com/gui/file/{file_hash}"
             }
         elif response.status_code == 404:
@@ -116,6 +118,8 @@ def scan_url_vt(target_url):
             return {
                 "status": "finished",
                 "malicious": stats.get("malicious", 0),
+                "suspicious": stats.get("suspicious", 0), # FIXED: Added missing key
+                "harmless": stats.get("harmless", 0),     # FIXED: Added missing key
                 "link": f"https://www.virustotal.com/gui/url/{url_id}"
             }
         elif response.status_code == 404:
@@ -154,7 +158,7 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
-    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal / Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
 
 # --- BACKUP ROBOT ---
 def backup_task():
