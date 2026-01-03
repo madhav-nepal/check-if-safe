@@ -16,7 +16,7 @@ UPLOAD_FOLDER = 'uploads'
 VT_API_KEY = os.environ.get('VT_API_KEY')
 
 # Email Config
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'ssl0.ovh.net')
+EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
 ALLOWED_DOMAINS = os.environ.get('ALLOWED_DOMAINS', '').split(',')
@@ -63,7 +63,6 @@ def check_vt_status(file_hash):
     if response.status_code == 200:
         data = response.json().get("data", {}).get("attributes", {})
         stats = data.get("last_analysis_stats", {})
-        # Check if analysis is actually done (if all stats are 0, it might be queued)
         total_scans = sum(stats.values())
         if total_scans < 5: 
             return {"status": "queued"}
@@ -77,7 +76,7 @@ def check_vt_status(file_hash):
             "id": response.json().get("data", {}).get("id")
         }
     elif response.status_code == 404:
-        return {"status": "queued"} # Not found means it's still processing upload
+        return {"status": "queued"} 
     else:
         return {"status": "error", "message": f"API Error: {response.status_code}"}
 
@@ -88,7 +87,7 @@ def upload_to_vt(filepath):
         files = {"file": (os.path.basename(filepath), file)}
         requests.post(url, headers=headers, files=files)
 
-# --- EMAIL LISTENER (Background) ---
+# --- EMAIL LISTENER (Background Robot) ---
 def send_reply(to_email, subject, body):
     try:
         msg = EmailMessage()
@@ -96,45 +95,62 @@ def send_reply(to_email, subject, body):
         msg['Subject'] = subject
         msg['From'] = EMAIL_USER
         msg['To'] = to_email
+        # Note: Using port 465 for SSL. If your host uses 587, change here.
         with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
             smtp.send_message(msg)
+        print(f"Reply sent to {to_email}")
     except Exception as e:
-        print(f"Email Error: {e}")
+        print(f"Email Reply Error: {e}")
 
 def email_listener():
+    print("Email Robot: Starting up...")
     while True:
         try:
-            if not EMAIL_USER: 
+            if not EMAIL_USER or not EMAIL_PASS: 
+                print("Email Robot: Credentials missing, sleeping...")
                 time.sleep(60)
                 continue
+            
+            # Connect to Email
             with Imbox(EMAIL_HOST, username=EMAIL_USER, password=EMAIL_PASS, ssl=True, ssl_context=None, starttls=False) as imbox:
                 unread_msgs = imbox.messages(unread=True)
                 for uid, message in unread_msgs:
                     sender = message.sent_from[0]['email']
-                    if not message.attachments: continue
+                    print(f"Email Robot: Processing email from {sender}")
                     
                     summary = []
-                    for attachment in message.attachments:
-                        fname = secure_filename(attachment.get('filename'))
-                        fpath = os.path.join(UPLOAD_FOLDER, fname)
-                        with open(fpath, "wb") as f: f.write(attachment.get('content').read())
-                        
-                        fhash = get_file_hash(fpath)
-                        res = check_vt_status(fhash)
-                        if res['status'] == 'queued': upload_to_vt(fpath)
-                        
-                        # Note: Email bot doesn't wait for queue, it just reports current status
-                        res_text = "Analysis Queued" if res['status'] == 'queued' else ("❌ MALICIOUS" if res.get('malicious', 0) > 0 else "✅ SAFE")
-                        summary.append(f"{fname}: {res_text}")
-                        log_scan(sender, fname, res_text)
-                        if os.path.exists(fpath): os.remove(fpath)
+                    if not message.attachments:
+                        summary.append("No attachments found to scan.")
+                    else:
+                        for attachment in message.attachments:
+                            fname = secure_filename(attachment.get('filename'))
+                            fpath = os.path.join(UPLOAD_FOLDER, fname)
+                            with open(fpath, "wb") as f: f.write(attachment.get('content').read())
+                            
+                            fhash = get_file_hash(fpath)
+                            res = check_vt_status(fhash)
+                            
+                            # If new file, upload it
+                            if res['status'] == 'queued': 
+                                upload_to_vt(fpath)
+                                res_text = "Analysis Started (Check back later)"
+                            else:
+                                res_text = "❌ DANGER" if res.get('malicious', 0) > 0 else "✅ SAFE"
+                            
+                            summary.append(f"File: {fname}\nResult: {res_text}")
+                            log_scan(sender, fname, res_text)
+                            if os.path.exists(fpath): os.remove(fpath)
                     
-                    send_reply(sender, f"Scan Result: {message.subject}", "\n".join(summary))
+                    send_reply(sender, f"Scan Result: {message.subject}", "\n\n".join(summary))
                     imbox.mark_seen(uid)
-        except Exception: pass
-        time.sleep(10)
+                    
+        except Exception as e:
+            print(f"Email Robot Error: {e}")
+        
+        time.sleep(10) # Check every 10 seconds
 
+# Start Email Thread only if User/Pass exists
 if os.environ.get('EMAIL_USER'):
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
@@ -151,15 +167,11 @@ def index():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
 
-        # 1. Calculate Hash
         file_hash = get_file_hash(file_path)
-
-        # 2. Check if exists, if not upload
         status = check_vt_status(file_hash)
         if status['status'] == 'queued':
             upload_to_vt(file_path)
 
-        # 3. Clean up and Redirect to Status Page
         if os.path.exists(file_path): os.remove(file_path)
         return redirect(url_for('scan_status', file_hash=file_hash))
 
