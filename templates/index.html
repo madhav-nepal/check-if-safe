@@ -7,19 +7,27 @@
     <style>
         body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
         .upload-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; width: 400px; }
-        h1 { margin-bottom: 20px; color: #333; }
-        .file-drop-area { border: 2px dashed #ccc; padding: 30px; border-radius: 8px; margin-bottom: 20px; transition: 0.3s; cursor: pointer; }
+        h1 { margin-bottom: 15px; color: #333; font-size: 24px; }
+        p.subtitle { color: #666; margin-bottom: 30px; font-size: 14px; line-height: 1.5; }
+        
+        /* Updated: Added margin to the top and bottom */
+        .file-drop-area { border: 2px dashed #ccc; padding: 30px; border-radius: 8px; margin-top: 25px; margin-bottom: 25px; transition: 0.3s; cursor: pointer; }
         .file-drop-area:hover { border-color: #007bff; background-color: #f8f9fa; }
+        
         input[type="file"] { display: none; }
-        .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; transition: background 0.3s; }
+        
+        /* Updated: Width is now 50% and centered */
+        .btn { background-color: #007bff; color: white; border: none; padding: 12px 0; border-radius: 6px; cursor: pointer; font-size: 16px; width: 50%; margin: 0 auto; display: block; transition: background 0.3s; }
         .btn:hover { background-color: #0056b3; }
-        .footer { margin-top: 20px; font-size: 12px; color: #aaa; }
+        
+        .footer { margin-top: 30px; font-size: 12px; color: #aaa; }
     </style>
 </head>
 <body>
     <div class="upload-box">
-        <h1>🔍 Secure Scanner</h1>
-        <p style="color: #666; margin-bottom: 25px;">Upload a file to scan for malware using VirusTotal.</p>
+        <h1>🛡️ Check If Safe | Know Before You Click</h1>
+        
+        <p class="subtitle">Learn how to save time by automating suspicious email scans.</p>
         
         <form action="/" method="post" enctype="multipart/form-data">
             <label class="file-drop-area">
@@ -30,9 +38,8 @@
         </form>
 
         <div class="footer">
-            &copy; 2025 Project By Madhav Nepal
+            &copy; 2025 Project By Madhav Nepal | Powered By VirusTotal
         </div>
     </div>
 </body>
 </html>
-
