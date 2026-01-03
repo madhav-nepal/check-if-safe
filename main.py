@@ -177,7 +177,7 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
-    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
 
 # --- BACKUP ROBOT ---
 def backup_task():
@@ -343,3 +343,4 @@ def stats():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
