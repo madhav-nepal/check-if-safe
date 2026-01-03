@@ -17,12 +17,16 @@ from imbox import Imbox
 
 # --- CONFIGURATION ---
 UPLOAD_FOLDER = 'uploads'
+DB_FILE = 'scan_stats.db' # Define DB File Name
 VT_API_KEY = os.environ.get('VT_API_KEY')
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
 EMAIL_USER = os.environ.get('EMAIL_USER')
 EMAIL_PASS = os.environ.get('EMAIL_PASS')
 
-# SKIPPED DOMAINS (Don't waste time scanning these)
+# SECURITY: MAX FILE SIZE (32 MB)
+MAX_FILE_SIZE = 32 * 1024 * 1024 
+
+# SKIPPED DOMAINS
 SKIP_DOMAINS = [
     'facebook.com', 'www.facebook.com',
     'twitter.com', 'www.twitter.com', 'x.com',
@@ -36,13 +40,14 @@ SKIP_DOMAINS = [
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE # FLASK SECURITY LIMIT
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 # --- DATABASE ---
 def init_db():
-    conn = sqlite3.connect('scan_stats.db')
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS scans 
                  (id INTEGER PRIMARY KEY, date TEXT, sender TEXT, filename TEXT, result TEXT)''')
@@ -52,7 +57,7 @@ def init_db():
 init_db()
 
 def log_scan(sender, filename, result):
-    conn = sqlite3.connect('scan_stats.db')
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("INSERT INTO scans (date, sender, filename, result) VALUES (?, ?, ?, ?)", 
@@ -100,9 +105,7 @@ def scan_url_vt(target_url):
         url_id = base64.urlsafe_b64encode(target_url.encode()).decode().strip("=")
         url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
         headers = {"x-apikey": VT_API_KEY}
-        
         response = requests.get(url, headers=headers, timeout=10)
-        
         if response.status_code == 200:
             data = response.json().get("data", {}).get("attributes", {})
             stats = data.get("last_analysis_stats", {})
@@ -117,22 +120,20 @@ def scan_url_vt(target_url):
     except: pass
     return {"status": "error", "link": "#"}
 
-# --- COMPACT EMAIL TEMPLATE ---
+# --- EMAIL TEMPLATE ---
 def generate_html_email(subject, items):
     rows = ""
     for item in items:
-        # Determine Color & Badge
         if item['status'] == 'DANGER':
             badge_style = "background-color: #dc3545; color: white; border: 1px solid #dc3545;"
             badge_text = "⚠️ DANGER"
         elif item['status'] == 'QUEUED':
             badge_style = "background-color: #ffc107; color: #212529; border: 1px solid #ffc107;"
             badge_text = "⏳ ANALYZING"
-        else: # SAFE
+        else:
             badge_style = "background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #1e8e3e;"
             badge_text = "✅ SAFE"
             
-        # Truncate long URLs for display
         display_name = item['name']
         if len(display_name) > 50: display_name = display_name[:47] + "..."
 
@@ -149,28 +150,34 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com</div></div></body></html>"""
 
-    return f"""
-    <html>
-        <body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;">
-            <div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-                <h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3>
-                
-                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">
-                    Analysis for: <strong>{subject}</strong>
-                </p>
+# --- BACKUP ROBOT (NEW) ---
+def backup_task():
+    while True:
+        # Sleep for 24 hours (86400 seconds)
+        time.sleep(86400)
+        try:
+            if not EMAIL_USER or not os.path.exists(DB_FILE): continue
+            
+            # Send Email with DB Attachment
+            msg = EmailMessage()
+            msg['Subject'] = f"🛡️ Database Backup: {datetime.datetime.now().strftime('%Y-%m-%d')}"
+            msg['From'] = EMAIL_USER
+            msg['To'] = EMAIL_USER # Send to yourself
+            msg.set_content("Attached is the daily database backup.")
 
-                <table style="width: 100%; border-collapse: collapse;">
-                    {rows}
-                </table>
+            with open(DB_FILE, 'rb') as f:
+                file_data = f.read()
+                msg.add_attachment(file_data, maintype='application', subtype='octet-stream', filename=DB_FILE)
 
-                <div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">
-                    Madhav Nepal | Powered by VirusTotal | CheckIfSafe.com
-                </div>
-            </div>
-        </body>
-    </html>
-    """
+            with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
+                smtp.login(EMAIL_USER, EMAIL_PASS)
+                smtp.send_message(msg)
+            print("--- BACKUP: Daily database backup sent successfully. ---", flush=True)
+            
+        except Exception as e:
+            print(f"--- BACKUP ERROR: {e} ---", flush=True)
 
 # --- EMAIL LISTENER ---
 def email_listener():
@@ -178,6 +185,12 @@ def email_listener():
     try:
         fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         print("--- ROBOT: I am the Master. ---", flush=True)
+        
+        # Start Backup Robot only if we are the Master
+        t_backup = threading.Thread(target=backup_task, daemon=True)
+        t_backup.start()
+        print("--- BACKUP: Backup robot started (Daily schedule). ---", flush=True)
+        
     except IOError: return
 
     while True:
@@ -196,69 +209,51 @@ def email_listener():
                     
                     scan_items = []
 
-                    # 1. SCAN LINKS (Filtered)
+                    # 1. SCAN LINKS
                     urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', body_plain)
                     unique_urls = list(set(urls)) 
-
                     for url in unique_urls:
-                        # FILTER: Skip social media domains
                         domain = urlparse(url).netloc.lower()
-                        if any(skip in domain for skip in SKIP_DOMAINS):
-                            continue # Skip this loop
-                            
+                        if any(skip in domain for skip in SKIP_DOMAINS): continue
                         res = scan_url_vt(url)
                         status = "QUEUED"
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
 
-                    # 2. SCAN ATTACHMENTS (Fast Wait: 30s Max)
+                    # 2. SCAN ATTACHMENTS
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
                             fpath = os.path.join(UPLOAD_FOLDER, fname)
                             with open(fpath, "wb") as f: f.write(attachment.get('content').read())
-                            
                             fhash = get_file_hash(fpath)
                             res = check_vt_file(fhash)
-                            
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                # FAST LOOP: Check every 10s, Max 3 times (30s Total)
                                 for _ in range(3): 
                                     time.sleep(10) 
                                     res = check_vt_file(fhash)
                                     if res['status'] == 'finished': break
-                            
-                            if res['status'] == 'finished':
-                                status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
-                            else:
-                                status = "QUEUED"
-                            
+                            status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE" if res['status'] == 'finished' else "QUEUED"
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
                     
-                    # 3. SEND COMPACT REPLY
+                    # 3. SEND REPLY
                     if scan_items:
                         html_body = generate_html_email(subject, scan_items)
-                        
                         msg = EmailMessage()
                         msg['Subject'] = f"Scan Result: {subject}"
                         msg['From'] = EMAIL_USER
                         msg['To'] = sender
-                        msg.set_content("Please enable HTML to view this report.")
+                        msg.set_content("Please enable HTML.")
                         msg.add_alternative(html_body, subtype='html')
-                        
                         with smtplib.SMTP_SSL(EMAIL_HOST, 465) as smtp:
                             smtp.login(EMAIL_USER, EMAIL_PASS)
                             smtp.send_message(msg)
-                        
                         imbox.mark_seen(uid)
                         print(f"Reply sent to {sender}", flush=True)
-
-        except Exception as e:
-            print(f"Error: {e}", flush=True)
-        
+        except Exception as e: print(f"Error: {e}", flush=True)
         time.sleep(10)
 
 if os.environ.get('EMAIL_USER'):
@@ -289,4 +284,3 @@ def scan_status(file_hash):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
