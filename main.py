@@ -123,23 +123,7 @@ def scan_url_vt(target_url):
             }
         elif response.status_code == 404:
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
-            print(f"URL {target_url} is new. Waiting...", flush=True)
-            
-            # INCREASED PATIENCE: Check every 5s for 60s (was 30s)
-            for _ in range(12): 
-                time.sleep(5)
-                response = requests.get(url, headers=headers, timeout=10)
-                if response.status_code == 200:
-                    data = response.json().get("data", {}).get("attributes", {})
-                    stats = data.get("last_analysis_stats", {})
-                    if sum(stats.values()) > 0:
-                        return {
-                            "status": "finished",
-                            "malicious": stats.get("malicious", 0),
-                            "suspicious": stats.get("suspicious", 0),
-                            "harmless": stats.get("harmless", 0),
-                            "link": f"https://www.virustotal.com/gui/url/{url_id}"
-                        }
+            # Wait logic handles elsewhere for Web? No, Web is instant. Email has wait.
             return {"status": "queued", "link": f"https://www.virustotal.com/gui/url/{url_id}"}
     except: pass
     return {"status": "error", "link": "#"}
@@ -174,7 +158,7 @@ def generate_html_email(subject, items):
             </td>
         </tr>
         """
-    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal | CheckIfSafe.com | Powered by VirusTotal</div></div></body></html>"""
+    return f"""<html><body style="font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; padding: 20px;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);"><h3 style="color: #2c3e50; margin-top: 0; padding-bottom: 15px; border-bottom: 2px solid #f1f1f1;">🛡️ Scan Report</h3><p style="font-size: 13px; color: #666; margin-bottom: 20px;">Analysis for: <strong>{subject}</strong></p><table style="width: 100%; border-collapse: collapse;">{rows}</table><div style="margin-top: 25px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #f1f1f1; padding-top: 15px;">Madhav Nepal Powered by VirusTotal | Scan Results Are Not Guaranteed To Be Accurate</div></div></body></html>"""
 
 # --- BACKUP ROBOT ---
 def backup_task():
@@ -256,13 +240,10 @@ def email_listener():
                             res = check_vt_file(fhash)
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                
-                                # INCREASED PATIENCE: Check every 5s for 120s (was 60s)
                                 for _ in range(24): 
                                     time.sleep(5) 
                                     res = check_vt_file(fhash)
                                     if res['status'] == 'finished': break
-                                    
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE" if res['status'] == 'finished' else "QUEUED"
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
@@ -288,7 +269,7 @@ if os.environ.get('EMAIL_USER'):
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
 
-# --- WEB ROUTES (UNCHANGED) ---
+# --- WEB ROUTES ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -299,9 +280,19 @@ def index():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
         file_hash = get_file_hash(file_path)
-        status = check_vt_file(file_hash)
-        if status['status'] == 'queued': upload_file_vt(file_path)
-        log_scan("Web User", filename, "QUEUED")
+        
+        # 1. Check Status IMMEDIATELY
+        status_data = check_vt_file(file_hash)
+        
+        if status_data['status'] == 'queued': 
+            upload_file_vt(file_path)
+            # Log as QUEUED for now (stats page will hide it)
+            log_scan("Web User", filename, "QUEUED")
+        else:
+            # Log the ACTUAL result immediately if known
+            final_status = "DANGER" if status_data.get('malicious', 0) > 0 else "SAFE"
+            log_scan("Web User", filename, final_status)
+        
         if os.path.exists(file_path): os.remove(file_path)
         return redirect(url_for('scan_status', file_hash=file_hash))
     return render_template('index.html')
@@ -317,16 +308,21 @@ def stats():
     end_date = request.args.get('end')
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
+    # --- UPDATED QUERIES: FILTER OUT 'QUEUED' ---
     if start_date and end_date:
-        query = "SELECT * FROM scans WHERE date >= ? AND date <= ? ORDER BY id DESC"
+        query = "SELECT * FROM scans WHERE date >= ? AND date <= ? AND result != 'QUEUED' ORDER BY id DESC"
         c.execute(query, (f"{start_date} 00:00:00", f"{end_date} 23:59:59"))
         title = f"Stats: {start_date} to {end_date}"
     else:
-        c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 50")
-        title = "Recent Scan Stats (Last 50)"
+        c.execute("SELECT * FROM scans WHERE result != 'QUEUED' ORDER BY id DESC LIMIT 50")
+        title = "Recent Scan Stats (Completed Only)"
+        
     rows = c.fetchall()
     conn.close()
+    
     table_rows = "".join([f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>" for r in rows])
+    
     html = f"""<html><head><title>Scan Reports</title><style>body {{ font-family: 'Segoe UI', sans-serif; padding: 40px; background: #f4f4f4; }}.container {{ max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}h1 {{ color: #333; }}table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}th, td {{ padding: 12px; border-bottom: 1px solid #ddd; text-align: left; }}th {{ background-color: #f8f9fa; }}.form-box {{ background: #e9ecef; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}input[type='date'] {{ padding: 8px; border-radius: 4px; border: 1px solid #ccc; }}button {{ padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }}</style></head><body><div class="container"><h1>🛡️ {title}</h1><div class="form-box"><form action="/stats" method="get"><label>From:</label><input type="date" name="start" required><label>To:</label><input type="date" name="end" required><button type="submit">Generate Report</button><a href="/stats" style="margin-left: 10px; color: #666; font-size: 14px;">Reset</a></form></div><table border='0'><tr><th>Date</th><th>Sender</th><th>File</th><th>Result</th></tr>{table_rows}</table></div></body></html>"""
     return render_template_string(html)
 
