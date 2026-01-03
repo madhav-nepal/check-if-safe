@@ -41,12 +41,10 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 if not os.path.exists(DB_FOLDER): os.makedirs(DB_FOLDER)
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 
-# --- NEW: FORCE NON-WWW REDIRECT ---
+# --- FORCE NON-WWW REDIRECT ---
 @app.before_request
 def redirect_www():
-    """Redirect www.checkifsafe.com to checkifsafe.com"""
     if request.host.startswith('www.'):
-        # 301 = Permanent Redirect
         return redirect(request.url.replace('www.', '', 1), code=301)
 
 # --- DATABASE ---
@@ -125,7 +123,6 @@ def scan_url_vt(target_url):
             }
         elif response.status_code == 404:
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
-            
             print(f"URL {target_url} is new. Waiting...", flush=True)
             for _ in range(6): 
                 time.sleep(5)
@@ -227,12 +224,24 @@ def email_listener():
                 for uid, message in unread_msgs:
                     sender = message.sent_from[0]['email']
                     subject = message.subject
+                    
+                    # --- NEW: COMBINE PLAIN + HTML FOR OUTLOOK/ICLOUD ---
                     body_plain = message.body['plain'][0] if message.body['plain'] else ""
+                    body_html = message.body['html'][0] if message.body['html'] else ""
+                    full_body = body_plain + " " + body_html
+                    # ----------------------------------------------------
+
                     print(f"Processing {sender}...", flush=True)
                     scan_items = []
-                    urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', body_plain)
+                    
+                    # Regex now runs on 'full_body' to catch links in HTML-only emails
+                    urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', full_body)
                     unique_urls = list(set(urls)) 
+                    
                     for url in unique_urls:
+                        # Clean up HTML artifacts like '> or ")
+                        url = url.strip('">')
+                        
                         domain = urlparse(url).netloc.lower()
                         if any(skip in domain for skip in SKIP_DOMAINS): continue
                         res = scan_url_vt(url)
@@ -240,6 +249,7 @@ def email_listener():
                         if res['status'] == 'finished':
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE"
                         scan_items.append({'name': url, 'type': 'Link', 'status': status, 'link': res['link']})
+                    
                     if message.attachments:
                         for attachment in message.attachments:
                             fname = secure_filename(attachment.get('filename'))
@@ -257,6 +267,7 @@ def email_listener():
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
                             log_scan(sender, fname, status)
+                    
                     if scan_items:
                         html_body = generate_html_email(subject, scan_items)
                         msg = EmailMessage()
