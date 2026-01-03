@@ -124,7 +124,9 @@ def scan_url_vt(target_url):
         elif response.status_code == 404:
             requests.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
             print(f"URL {target_url} is new. Waiting...", flush=True)
-            for _ in range(6): 
+            
+            # INCREASED PATIENCE: Check every 5s for 60s (was 30s)
+            for _ in range(12): 
                 time.sleep(5)
                 response = requests.get(url, headers=headers, timeout=10)
                 if response.status_code == 200:
@@ -225,23 +227,18 @@ def email_listener():
                     sender = message.sent_from[0]['email']
                     subject = message.subject
                     
-                    # --- NEW: COMBINE PLAIN + HTML FOR OUTLOOK/ICLOUD ---
                     body_plain = message.body['plain'][0] if message.body['plain'] else ""
                     body_html = message.body['html'][0] if message.body['html'] else ""
                     full_body = body_plain + " " + body_html
-                    # ----------------------------------------------------
 
                     print(f"Processing {sender}...", flush=True)
                     scan_items = []
                     
-                    # Regex now runs on 'full_body' to catch links in HTML-only emails
                     urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', full_body)
                     unique_urls = list(set(urls)) 
                     
                     for url in unique_urls:
-                        # Clean up HTML artifacts like '> or ")
                         url = url.strip('">')
-                        
                         domain = urlparse(url).netloc.lower()
                         if any(skip in domain for skip in SKIP_DOMAINS): continue
                         res = scan_url_vt(url)
@@ -259,10 +256,13 @@ def email_listener():
                             res = check_vt_file(fhash)
                             if res['status'] == 'queued':
                                 upload_file_vt(fpath)
-                                for _ in range(12): 
+                                
+                                # INCREASED PATIENCE: Check every 5s for 120s (was 60s)
+                                for _ in range(24): 
                                     time.sleep(5) 
                                     res = check_vt_file(fhash)
                                     if res['status'] == 'finished': break
+                                    
                             status = "DANGER" if res.get('malicious', 0) > 0 else "SAFE" if res['status'] == 'finished' else "QUEUED"
                             scan_items.append({'name': fname, 'type': 'File', 'status': status, 'link': res.get('link', '#')})
                             if os.path.exists(fpath): os.remove(fpath)
@@ -288,7 +288,7 @@ if os.environ.get('EMAIL_USER'):
     t = threading.Thread(target=email_listener, daemon=True)
     t.start()
 
-# --- WEB ROUTES ---
+# --- WEB ROUTES (UNCHANGED) ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
